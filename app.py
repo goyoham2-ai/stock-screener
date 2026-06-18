@@ -45,58 +45,19 @@ def get_prev_bizday(date_str, n=1):
 @st.cache_data(ttl=1800)
 def load_market_data(date_str):
     try:
-        kospi = fdr.StockListing('KOSPI')
+        kospi  = fdr.StockListing('KOSPI')
         kosdaq = fdr.StockListing('KOSDAQ')
         df = pd.concat([kospi, kosdaq])
         return df
-    except Exception as e:
-        return pd.DataFrame()
-
-@st.cache_data(ttl=1800)
-def load_foreign_institution(date_str):
-    try:
-        url = f"https://finance.naver.com/sise/sise_quant.naver?sosok=0"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        result = []
-        for sosok in ["0", "1"]:
-            url = f"https://finance.naver.com/sise/sise_quant.naver?sosok={sosok}"
-            res = requests.get(url, headers=headers, timeout=10)
-            soup = BeautifulSoup(res.text, "lxml")
-            table = soup.find("table", {"class": "type_2"})
-            if not table:
-                continue
-            rows = table.find_all("tr")
-            for row in rows:
-                cols = row.find_all("td")
-                if len(cols) < 10:
-                    continue
-                try:
-                    name   = cols[1].text.strip()
-                    price  = cols[2].text.strip().replace(",", "")
-                    chg    = cols[4].text.strip().replace(",", "").replace("%", "")
-                    volume = cols[5].text.strip().replace(",", "")
-                    f_buy  = cols[8].text.strip().replace(",", "")
-                    if name and price:
-                        result.append({
-                            "종목명": name,
-                            "현재가": int(price) if price.lstrip("-").isdigit() else 0,
-                            "등락률": float(chg) if chg.lstrip("-").replace(".", "").isdigit() else 0,
-                            "거래량": int(volume) if volume.isdigit() else 0,
-                            "외국인순매수": int(f_buy) if f_buy.lstrip("-").isdigit() else 0,
-                        })
-                except Exception:
-                    continue
-        return pd.DataFrame(result)
-    except Exception as e:
+    except Exception:
         return pd.DataFrame()
 
 @st.cache_data(ttl=1800)
 def load_investor_by_stock(date_str):
     try:
-        url = "https://finance.naver.com/sise/sise_quant.naver?sosok=0"
-        headers = {"User-Agent": "Mozilla/5.0"}
         result = []
-       for sosok in ["0", "1"]:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        for sosok in ["0", "1"]:
             for page in range(1, 3):
                 url = f"https://finance.naver.com/sise/sise_quant.naver?sosok={sosok}&page={page}"
                 res = requests.get(url, headers=headers, timeout=10)
@@ -117,19 +78,19 @@ def load_investor_by_stock(date_str):
                         f_net  = cols[8].text.strip().replace(",", "")
                         if name and price and price.lstrip("-").isdigit():
                             result.append({
-                                "종목명":     name,
-                                "현재가":     int(price),
-                                "등락률":     float(chg) if chg.lstrip("-").replace(".", "").isdigit() else 0,
-                                "거래량":     int(volume) if volume.isdigit() else 0,
+                                "종목명":      name,
+                                "현재가":      int(price),
+                                "등락률":      float(chg) if chg.lstrip("-").replace(".", "").isdigit() else 0,
+                                "거래량":      int(volume) if volume.isdigit() else 0,
                                 "외국인순매수": int(f_net) if f_net.lstrip("-").isdigit() else 0,
                             })
                     except Exception:
                         continue
-       df = pd.DataFrame(result) if result else pd.DataFrame()
+        df = pd.DataFrame(result) if result else pd.DataFrame()
         if not df.empty:
             df = df.drop_duplicates(subset=["종목명"]).reset_index(drop=True)
         return df
-    except Exception as e:
+    except Exception:
         return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
@@ -160,17 +121,17 @@ tab1, tab2, tab3 = st.tabs(["📊 외국인 수급", "🔍 낙폭과대주", "�
 
 with tab1:
     st.markdown("#### 외국인 순매수 상위 종목")
-    with st.spinner("네이버 금융에서 데이터 불러오는 중..."):
+    with st.spinner("데이터 불러오는 중..."):
         try:
             df = load_investor_by_stock(bizday)
             if df.empty:
                 st.warning("데이터를 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.")
             else:
-                top_f = df[df["외국인순매수"] > 0].sort_values("외국인순매수", ascending=False).head(15)
+                top_f = df[df["외국인순매수"] > 0].sort_values("외국인순매수", ascending=False).head(20)
                 if top_f.empty:
                     st.warning("외국인 순매수 데이터가 없습니다.")
                 else:
-                    for _, row in top_f.iterrows():
+                    for idx, row in top_f.iterrows():
                         chg = row["등락률"]
                         c1, c2 = st.columns([2, 1])
                         with c1:
@@ -181,8 +142,10 @@ with tab1:
                                 unsafe_allow_html=True
                             )
                         with c2:
-                            st.metric("", f"{row['현재가']:,}원", f"{chg:+.1f}%",
-                                      delta_color="normal" if chg >= 0 else "inverse")
+                            st.metric(
+                                "", f"{row['현재가']:,}원", f"{chg:+.1f}%",
+                                delta_color="normal" if chg >= 0 else "inverse"
+                            )
                         st.divider()
         except Exception as e:
             st.error(f"오류: {e}")
@@ -191,7 +154,7 @@ with tab2:
     st.markdown("#### 낙폭과대 + 외국인 순매수")
     min_drop = st.session_state.get("min_drop", 30)
     min_vol  = st.session_state.get("min_vol", 1.5)
-    st.caption(f"조건: 고점대비 -{min_drop}% 이상 · 거래량 {min_vol}배↑ · 외국인 순매수")
+    st.caption(f"조건: 고점대비 -{min_drop}% 이상 · 외국인 순매수")
 
     if st.button("🔍 스크리닝 실행", use_container_width=True):
         with st.spinner("분석 중... (1~2분 소요)"):
@@ -200,20 +163,19 @@ with tab2:
                 if df.empty:
                     st.warning("데이터 없음. 잠시 후 다시 시도해 주세요.")
                 else:
-                    results = []
-                    cands = df[df["외국인순매수"] > 0]
-                    progress = st.progress(0)
-                    total = len(cands)
-
-                    market_df = load_market_data(bizday)
+                    market_df  = load_market_data(bizday)
                     ticker_map = {}
                     if not market_df.empty:
-                        for col in ["Symbol", "Code", "ticker"]:
-                            if col in market_df.columns:
-                                name_col = [c for c in market_df.columns if "Name" in c or "종목명" in c]
-                                if name_col:
-                                    ticker_map = dict(zip(market_df[name_col[0]], market_df[col]))
-                                break
+                        for name_col in ["Name", "종목명"]:
+                            for code_col in ["Symbol", "Code"]:
+                                if name_col in market_df.columns and code_col in market_df.columns:
+                                    ticker_map = dict(zip(market_df[name_col], market_df[code_col]))
+                                    break
+
+                    results  = []
+                    cands    = df[df["외국인순매수"] > 0]
+                    total    = len(cands)
+                    progress = st.progress(0)
 
                     for i, (_, row) in enumerate(cands.iterrows()):
                         progress.progress(min(int((i+1)/max(total,1)*100), 100))
@@ -221,7 +183,6 @@ with tab2:
                             name   = row["종목명"]
                             price  = row["현재가"]
                             chg    = row["등락률"]
-                            volume = row["거래량"]
                             f_net  = row["외국인순매수"]
                             if price == 0:
                                 continue
@@ -259,9 +220,11 @@ with tab2:
                                     unsafe_allow_html=True
                                 )
                             with c2:
-                                st.metric("", f"{r['price']:,}원", f"{r['chg']:+.1f}%",
-                                          delta_color="normal" if r["chg"] >= 0 else "inverse")
-                           chart = load_chart(r["ticker"])
+                                st.metric(
+                                    "", f"{r['price']:,}원", f"{r['chg']:+.1f}%",
+                                    delta_color="normal" if r["chg"] >= 0 else "inverse"
+                                )
+                            chart = load_chart(r["ticker"])
                             if not chart.empty:
                                 fig = go.Figure(go.Scatter(
                                     x=list(range(len(chart))),
