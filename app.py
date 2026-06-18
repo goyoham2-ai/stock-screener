@@ -33,8 +33,8 @@ SECTOR_MAP = {
     "자동차":   ["현대차","기아","현대모비스","한온시스템","만도","현대위아","HL만도","서연이화","성우하이텍","화신"],
     "유리기판": ["SKC","삼성전기","LG이노텍","필옵틱스","이수페타시스","심텍","대덕전자","코리아써키트","티씨케이","원익홀딩스"],
     "AI/IT":    ["NAVER","카카오","크래프톤","넥슨게임즈","엔씨소프트","펄어비스","카카오게임즈","더존비즈온","NHN","케이아이엔엑스"],
-    "방산":     ["한화에어로스페이스","LIG넥스원","현대로템","한국항공우주","빅텍","퍼스텍","스페코","휴니드","한화시스템","LIG넥스원"],
-    "조선":     ["HD현대중공업","삼성중공업","한화오션","HD현대미포","현대삼호중공업","HD현대","세진중공업","동성화인텍","케이에스피","강림인슈"],
+    "방산":     ["한화에어로스페이스","LIG넥스원","현대로템","한국항공우주","빅텍","퍼스텍","스페코","휴니드","한화시스템"],
+    "조선":     ["HD현대중공업","삼성중공업","한화오션","HD현대미포","현대삼호중공업","HD현대","세진중공업","동성화인텍","케이에스피"],
 }
 
 def get_last_bizday(offset=1):
@@ -58,8 +58,7 @@ def load_market_data():
     try:
         kospi  = fdr.StockListing('KOSPI')
         kosdaq = fdr.StockListing('KOSDAQ')
-        df = pd.concat([kospi, kosdaq])
-        return df
+        return pd.concat([kospi, kosdaq])
     except Exception:
         return pd.DataFrame()
 
@@ -124,109 +123,116 @@ def load_52w_high(ticker):
     except Exception:
         return None
 
+def show_stock_list(names, price_map, chg_map, inv_map, vol_map):
+    found = False
+    for name in names:
+        if name not in price_map:
+            continue
+        found = True
+        price  = price_map.get(name, 0)
+        chg    = chg_map.get(name, 0)
+        f_net  = inv_map.get(name, 0)
+        volume = vol_map.get(name, 0)
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.markdown(f"**{name}**")
+            color_tag = "tag-buy" if f_net >= 0 else "tag-drop"
+            sign = "+" if f_net >= 0 else ""
+            st.markdown(
+                f"<span class='{color_tag}'>외인 {sign}{f_net:,}주</span> "
+                f"<span class='tag-vol'>거래량 {volume:,}</span>",
+                unsafe_allow_html=True
+            )
+        with c2:
+            st.metric(
+                "", f"{price:,}원", f"{chg:+.1f}%",
+                delta_color="normal" if chg >= 0 else "inverse"
+            )
+        st.divider()
+    if not found:
+        st.info("해당 섹터 종목 데이터가 없습니다.")
+
 st.title("📈 수급 스크리너")
 bizday = get_last_bizday(1)
 st.caption(f"기준일: {bizday[:4]}.{bizday[4:6]}.{bizday[6:]} · 장 마감 후 업데이트")
 
 tab1, tab2, tab3 = st.tabs(["📊 섹터별 수급", "🔍 낙폭과대주", "⚙️ 설정"])
 
+# ── 공통 데이터 로드 ──────────────────────────────────────────
+with st.spinner("데이터 불러오는 중..."):
+    inv_df = load_investor_by_stock(bizday)
+
+if not inv_df.empty:
+    inv_map   = dict(zip(inv_df["종목명"], inv_df["외국인순매수"]))
+    price_map = dict(zip(inv_df["종목명"], inv_df["현재가"]))
+    chg_map   = dict(zip(inv_df["종목명"], inv_df["등락률"]))
+    vol_map   = dict(zip(inv_df["종목명"], inv_df["거래량"]))
+    sector_totals = {
+        sector: sum(inv_map.get(n, 0) for n in names)
+        for sector, names in SECTOR_MAP.items()
+    }
+    sector_series = pd.Series(sector_totals).sort_values(ascending=False)
+    top_sector = sector_series.idxmax()
+else:
+    inv_map = price_map = chg_map = vol_map = {}
+    sector_series = pd.Series()
+    top_sector = list(SECTOR_MAP.keys())[0]
+
+# ══════════════════════════════════════════════════════════════
 with tab1:
     st.markdown("#### 섹터별 외국인 순매수")
-    with st.spinner("데이터 불러오는 중..."):
-        try:
-            inv_df = load_investor_by_stock(bizday)
-            if inv_df.empty:
-                st.warning("데이터를 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.")
-            else:
-                inv_map = dict(zip(inv_df["종목명"], inv_df["외국인순매수"]))
-                price_map = dict(zip(inv_df["종목명"], inv_df["현재가"]))
-                chg_map   = dict(zip(inv_df["종목명"], inv_df["등락률"]))
-                vol_map   = dict(zip(inv_df["종목명"], inv_df["거래량"]))
+    if inv_df.empty:
+        st.warning("데이터를 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.")
+    else:
+        colors = ["#E24B4A" if v >= 0 else "#378ADD" for v in sector_series.values]
+        fig = go.Figure(go.Bar(
+            x=sector_series.index,
+            y=sector_series.values,
+            marker_color=colors,
+            text=[f"{v:,}" for v in sector_series.values],
+            textposition="outside",
+        ))
+        fig.update_layout(
+            height=260,
+            margin=dict(l=0, r=0, t=10, b=50),
+            yaxis_title="외국인 순매수 (주)",
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            font=dict(size=11),
+            xaxis=dict(tickangle=-30),
+        )
+        st.plotly_chart(fig, use_container_width=True, key="sector_chart")
+        st.markdown(f"#### 🏆 오늘 1위: **{top_sector}**")
+        st.markdown("---")
 
-                # 섹터별 외국인 순매수 합계
-                sector_totals = {}
-                for sector, names in SECTOR_MAP.items():
-                    total = sum(inv_map.get(n, 0) for n in names)
-                    sector_totals[sector] = total
+        selected = st.selectbox(
+            "섹터 선택",
+            list(SECTOR_MAP.keys()),
+            index=list(SECTOR_MAP.keys()).index(top_sector),
+            key="tab1_sector"
+        )
+        st.markdown(f"##### {selected} 종목")
+        show_stock_list(SECTOR_MAP[selected], price_map, chg_map, inv_map, vol_map)
 
-                sector_series = pd.Series(sector_totals).sort_values(ascending=False)
-
-                # 섹터 막대 차트
-                colors = ["#E24B4A" if v >= 0 else "#378ADD" for v in sector_series.values]
-                fig = go.Figure(go.Bar(
-                    x=sector_series.index,
-                    y=sector_series.values,
-                    marker_color=colors,
-                    text=[f"{v:,}" for v in sector_series.values],
-                    textposition="outside",
-                ))
-                fig.update_layout(
-                    height=260,
-                    margin=dict(l=0, r=0, t=10, b=50),
-                    yaxis_title="외국인 순매수 (주)",
-                    plot_bgcolor="white",
-                    paper_bgcolor="white",
-                    font=dict(size=11),
-                    xaxis=dict(tickangle=-30),
-                )
-                st.plotly_chart(fig, use_container_width=True, key="sector_chart")
-
-                # 1위 섹터 강조
-                top_sector = sector_series.idxmax()
-                st.markdown(f"#### 🏆 오늘 1위: **{top_sector}**")
-                st.markdown("---")
-
-                # 섹터 선택 → 종목 보기
-                selected = st.selectbox(
-                    "섹터 선택해서 종목 보기",
-                    list(SECTOR_MAP.keys()),
-                    index=list(SECTOR_MAP.keys()).index(top_sector)
-                )
-
-                st.markdown(f"##### {selected} 종목")
-                names_in_sector = SECTOR_MAP[selected]
-                found = False
-                for name in names_in_sector:
-                    if name not in price_map:
-                        continue
-                    found = True
-                    price  = price_map.get(name, 0)
-                    chg    = chg_map.get(name, 0)
-                    f_net  = inv_map.get(name, 0)
-                    volume = vol_map.get(name, 0)
-                    c1, c2 = st.columns([2, 1])
-                    with c1:
-                        st.markdown(f"**{name}**")
-                        color_tag = "tag-buy" if f_net >= 0 else "tag-drop"
-                        sign = "+" if f_net >= 0 else ""
-                        st.markdown(
-                            f"<span class='{color_tag}'>외인 {sign}{f_net:,}주</span> "
-                            f"<span class='tag-vol'>거래량 {volume:,}</span>",
-                            unsafe_allow_html=True
-                        )
-                    with c2:
-                        st.metric(
-                            "", f"{price:,}원", f"{chg:+.1f}%",
-                            delta_color="normal" if chg >= 0 else "inverse"
-                        )
-                    st.divider()
-                if not found:
-                    st.info("해당 섹터 종목 데이터가 없습니다.")
-        except Exception as e:
-            st.error(f"오류: {e}")
-
+# ══════════════════════════════════════════════════════════════
 with tab2:
-    st.markdown("#### 낙폭과대 + 외국인 순매수")
-    min_drop = st.session_state.get("min_drop", 30)
-    st.caption(f"조건: 고점대비 -{min_drop}% 이상 · 외국인 순매수")
+    st.markdown("#### 낙폭과대주 — 섹터별")
+    if inv_df.empty:
+        st.warning("데이터를 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.")
+    else:
+        min_drop = st.session_state.get("min_drop", 30)
+        st.caption(f"조건: 52주 고점대비 -{min_drop}% 이상 · 외국인 순매수")
 
-    if st.button("🔍 스크리닝 실행", use_container_width=True):
-        with st.spinner("분석 중... (1~2분 소요)"):
-            try:
-                inv_df = load_investor_by_stock(bizday)
-                if inv_df.empty:
-                    st.warning("데이터 없음. 잠시 후 다시 시도해 주세요.")
-                else:
+        selected2 = st.selectbox(
+            "섹터 선택",
+            list(SECTOR_MAP.keys()),
+            index=list(SECTOR_MAP.keys()).index(top_sector),
+            key="tab2_sector"
+        )
+
+        if st.button("🔍 스크리닝 실행", use_container_width=True):
+            with st.spinner(f"{selected2} 섹터 분석 중..."):
+                try:
                     market_df  = load_market_data()
                     ticker_map = {}
                     if not market_df.empty:
@@ -237,18 +243,17 @@ with tab2:
                                     break
 
                     results  = []
-                    cands    = inv_df[inv_df["외국인순매수"] > 0]
-                    total    = len(cands)
+                    names    = SECTOR_MAP[selected2]
                     progress = st.progress(0)
+                    total    = len(names)
 
-                    for i, (_, row) in enumerate(cands.iterrows()):
+                    for i, name in enumerate(names):
                         progress.progress(min(int((i+1)/max(total,1)*100), 100))
                         try:
-                            name   = row["종목명"]
-                            price  = row["현재가"]
-                            chg    = row["등락률"]
-                            f_net  = row["외국인순매수"]
-                            if price == 0:
+                            price = price_map.get(name, 0)
+                            chg   = chg_map.get(name, 0)
+                            f_net = inv_map.get(name, 0)
+                            if price == 0 or f_net <= 0:
                                 continue
                             ticker = ticker_map.get(name)
                             if not ticker:
@@ -274,7 +279,7 @@ with tab2:
 
                     if results:
                         st.success(f"✅ {len(results)}개 종목 발견")
-                        for r in sorted(results, key=lambda x: x["drop"])[:20]:
+                        for r in sorted(results, key=lambda x: x["drop"]):
                             c1, c2 = st.columns([2, 1])
                             with c1:
                                 st.markdown(f"**{r['name']}** `{r['ticker']}`")
@@ -309,10 +314,11 @@ with tab2:
                                 st.plotly_chart(fig, use_container_width=True, key=f"chart_{r['ticker']}")
                             st.divider()
                     else:
-                        st.warning("조건에 맞는 종목 없음. 설정에서 조건을 완화해 보세요.")
-            except Exception as e:
-                st.error(f"오류: {e}")
+                        st.warning("조건에 맞는 종목 없음. 설정에서 낙폭 조건을 완화해 보세요.")
+                except Exception as e:
+                    st.error(f"오류: {e}")
 
+# ══════════════════════════════════════════════════════════════
 with tab3:
     st.markdown("#### 스크리닝 조건 설정")
     drop_val = st.slider("52주 고점 대비 낙폭 (%)", 10, 60,
