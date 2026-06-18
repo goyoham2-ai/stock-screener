@@ -96,8 +96,8 @@ def load_investor_by_stock(date_str):
         url = "https://finance.naver.com/sise/sise_quant.naver?sosok=0"
         headers = {"User-Agent": "Mozilla/5.0"}
         result = []
-        for sosok in ["0", "1"]:
-            for page in range(1, 4):
+       for sosok in ["0", "1"]:
+            for page in range(1, 3):
                 url = f"https://finance.naver.com/sise/sise_quant.naver?sosok={sosok}&page={page}"
                 res = requests.get(url, headers=headers, timeout=10)
                 soup = BeautifulSoup(res.text, "lxml")
