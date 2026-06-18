@@ -1,8 +1,10 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from pykrx import stock
+import FinanceDataReader as fdr
 import datetime
+import requests
+from bs4 import BeautifulSoup
 
 st.set_page_config(
     page_title="수급 스크리너",
@@ -40,260 +42,188 @@ def get_prev_bizday(date_str, n=1):
             count += 1
     return d.strftime("%Y%m%d")
 
-def find_col(df, candidates):
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return df.columns[0]
-
 @st.cache_data(ttl=1800)
-def load_ohlcv(date_str):
+def load_market_data(date_str):
     try:
-        df1 = stock.get_market_ohlcv_by_ticker(date_str, market="KOSPI")
-        df2 = stock.get_market_ohlcv_by_ticker(date_str, market="KOSDAQ")
-        df = pd.concat([df1, df2])
-        # 컬럼명 영문 변환
-        rename_map = {
-            "시가": "Open", "고가": "High", "저가": "Low",
-            "종가": "Close", "거래량": "Volume", "거래대금": "Amount",
-            "등락률": "Change"
-        }
-        df = df.rename(columns=rename_map)
+        kospi = fdr.StockListing('KOSPI')
+        kosdaq = fdr.StockListing('KOSDAQ')
+        df = pd.concat([kospi, kosdaq])
         return df
     except Exception as e:
-        st.error(f"OHLCV 로드 오류: {e}")
         return pd.DataFrame()
 
 @st.cache_data(ttl=1800)
-def load_foreign(date_str):
+def load_foreign_institution(date_str):
     try:
-        k1 = stock.get_market_net_purchases_of_equities_by_ticker(date_str, date_str, "KOSPI", "외국인")
-        k2 = stock.get_market_net_purchases_of_equities_by_ticker(date_str, date_str, "KOSDAQ", "외국인")
-        return pd.concat([k1, k2])
-    except Exception:
+        url = f"https://finance.naver.com/sise/sise_quant.naver?sosok=0"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        result = []
+        for sosok in ["0", "1"]:
+            url = f"https://finance.naver.com/sise/sise_quant.naver?sosok={sosok}"
+            res = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(res.text, "lxml")
+            table = soup.find("table", {"class": "type_2"})
+            if not table:
+                continue
+            rows = table.find_all("tr")
+            for row in rows:
+                cols = row.find_all("td")
+                if len(cols) < 10:
+                    continue
+                try:
+                    name   = cols[1].text.strip()
+                    price  = cols[2].text.strip().replace(",", "")
+                    chg    = cols[4].text.strip().replace(",", "").replace("%", "")
+                    volume = cols[5].text.strip().replace(",", "")
+                    f_buy  = cols[8].text.strip().replace(",", "")
+                    if name and price:
+                        result.append({
+                            "종목명": name,
+                            "현재가": int(price) if price.lstrip("-").isdigit() else 0,
+                            "등락률": float(chg) if chg.lstrip("-").replace(".", "").isdigit() else 0,
+                            "거래량": int(volume) if volume.isdigit() else 0,
+                            "외국인순매수": int(f_buy) if f_buy.lstrip("-").isdigit() else 0,
+                        })
+                except Exception:
+                    continue
+        return pd.DataFrame(result)
+    except Exception as e:
         return pd.DataFrame()
 
 @st.cache_data(ttl=1800)
-def load_institution(date_str):
+def load_investor_by_stock(date_str):
     try:
-        k1 = stock.get_market_net_purchases_of_equities_by_ticker(date_str, date_str, "KOSPI", "기관합계")
-        k2 = stock.get_market_net_purchases_of_equities_by_ticker(date_str, date_str, "KOSDAQ", "기관합계")
-        return pd.concat([k1, k2])
-    except Exception:
+        url = "https://finance.naver.com/sise/sise_quant.naver?sosok=0"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        result = []
+        for sosok in ["0", "1"]:
+            for page in range(1, 4):
+                url = f"https://finance.naver.com/sise/sise_quant.naver?sosok={sosok}&page={page}"
+                res = requests.get(url, headers=headers, timeout=10)
+                soup = BeautifulSoup(res.text, "lxml")
+                table = soup.find("table", {"class": "type_2"})
+                if not table:
+                    continue
+                rows = table.find_all("tr")
+                for row in rows:
+                    cols = row.find_all("td")
+                    if len(cols) < 10:
+                        continue
+                    try:
+                        name   = cols[1].text.strip()
+                        price  = cols[2].text.strip().replace(",", "")
+                        chg    = cols[4].text.strip().replace(",", "").replace("%", "")
+                        volume = cols[5].text.strip().replace(",", "")
+                        f_net  = cols[8].text.strip().replace(",", "")
+                        if name and price and price.lstrip("-").isdigit():
+                            result.append({
+                                "종목명":     name,
+                                "현재가":     int(price),
+                                "등락률":     float(chg) if chg.lstrip("-").replace(".", "").isdigit() else 0,
+                                "거래량":     int(volume) if volume.isdigit() else 0,
+                                "외국인순매수": int(f_net) if f_net.lstrip("-").isdigit() else 0,
+                            })
+                    except Exception:
+                        continue
+        return pd.DataFrame(result) if result else pd.DataFrame()
+    except Exception as e:
         return pd.DataFrame()
-
-@st.cache_data(ttl=3600)
-def load_52w_high(ticker):
-    try:
-        d_end = get_last_bizday(1)
-        d_start = (datetime.datetime.strptime(d_end, "%Y%m%d") - datetime.timedelta(days=365)).strftime("%Y%m%d")
-        df = stock.get_market_ohlcv_by_date(d_start, d_end, ticker)
-        if df.empty:
-            return None
-        col = find_col(df, ["고가", "High", "high"])
-        return df[col].max()
-    except Exception:
-        return None
-
-@st.cache_data(ttl=3600)
-def load_volume_avg(ticker, days=20):
-    try:
-        d_end = get_last_bizday(2)
-        d_start = get_prev_bizday(d_end, days)
-        df = stock.get_market_ohlcv_by_date(d_start, d_end, ticker)
-        if df.empty or len(df) < 5:
-            return None
-        col = find_col(df, ["거래량", "Volume", "volume"])
-        return df[col].mean()
-    except Exception:
-        return None
 
 @st.cache_data(ttl=3600)
 def load_chart(ticker, days=30):
     try:
-        d_end = get_last_bizday(1)
-        d_start = get_prev_bizday(d_end, days)
-        df = stock.get_market_ohlcv_by_date(d_start, d_end, ticker)
-        if df.empty:
-            return pd.Series()
-        col = find_col(df, ["종가", "Close", "close"])
-        return df[col]
+        d_end   = datetime.datetime.now().strftime("%Y-%m-%d")
+        d_start = (datetime.datetime.now() - datetime.timedelta(days=days*2)).strftime("%Y-%m-%d")
+        df = fdr.DataReader(ticker, d_start, d_end)
+        return df["Close"].tail(days) if not df.empty else pd.Series()
     except Exception:
         return pd.Series()
 
-@st.cache_data(ttl=1800)
-def debug_ohlcv_columns(date_str):
+@st.cache_data(ttl=3600)
+def load_52w_high(ticker):
     try:
-        df = stock.get_market_ohlcv_by_ticker(date_str, market="KOSPI")
-        return list(df.columns)
-    except Exception as e:
-        return [str(e)]
-
-def get_price(row):
-    for c in ["종가", "Close", "close"]:
-        if c in row.index:
-            return row[c]
-    return row.iloc[3] if len(row) > 3 else 0
-
-def get_volume(row):
-    for c in ["거래량", "Volume", "volume"]:
-        if c in row.index:
-            return row[c]
-    return row.iloc[4] if len(row) > 4 else 0
-
-def get_chg(row):
-    for c in ["등락률", "Change", "change", "등락"]:
-        if c in row.index:
-            return row[c]
-    return 0
+        d_end   = datetime.datetime.now().strftime("%Y-%m-%d")
+        d_start = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
+        df = fdr.DataReader(ticker, d_start, d_end)
+        return df["High"].max() if not df.empty else None
+    except Exception:
+        return None
 
 st.title("📈 수급 스크리너")
 bizday = get_last_bizday(1)
 st.caption(f"기준일: {bizday[:4]}.{bizday[4:6]}.{bizday[6:]} · 장 마감 후 업데이트")
 
-# 디버깅: 실제 컬럼명 확인
-with st.expander("🔧 데이터 컬럼 확인 (문제해결용)"):
-    cols = debug_ohlcv_columns(bizday)
-    st.write("OHLCV 컬럼명:", cols)
-    f_df = load_foreign(bizday)
-    if not f_df.empty:
-        st.write("외국인 수급 컬럼명:", list(f_df.columns))
-    else:
-        st.write("외국인 수급 데이터 없음")
-
-tab1, tab2, tab3 = st.tabs(["📊 주도섹터", "🔍 낙폭과대주", "⚙️ 설정"])
+tab1, tab2, tab3 = st.tabs(["📊 외국인 수급", "🔍 낙폭과대주", "⚙️ 설정"])
 
 with tab1:
-    st.markdown("#### 오늘의 주도 섹터 (외국인+기관)")
-    with st.spinner("데이터 불러오는 중..."):
+    st.markdown("#### 외국인 순매수 상위 종목")
+    with st.spinner("네이버 금융에서 데이터 불러오는 중..."):
         try:
-            foreign_df = load_foreign(bizday)
-            inst_df    = load_institution(bizday)
-            ohlcv_df   = load_ohlcv(bizday)
-
-            if foreign_df.empty:
-                st.warning("외국인 수급 데이터를 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.")
-            elif ohlcv_df.empty:
-                st.warning("주가 데이터를 불러올 수 없습니다.")
+            df = load_investor_by_stock(bizday)
+            if df.empty:
+                st.warning("데이터를 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.")
             else:
-                f_col = foreign_df.columns[0]
-                i_col = inst_df.columns[0] if not inst_df.empty else None
-
-                merged = pd.DataFrame({"외국인": foreign_df[f_col]})
-                merged["기관"] = inst_df[i_col] if i_col else 0
-                merged = merged.fillna(0)
-                merged["합계"] = merged["외국인"] + merged["기관"]
-
-                sector_dict = {}
-                for ticker in merged.index:
-                    try:
-                        sector = stock.get_market_sector_classifications(bizday, ticker)
-                        if not sector:
-                            continue
-                        if sector not in sector_dict:
-                            sector_dict[sector] = {"외국인": 0, "기관": 0, "합계": 0, "종목": []}
-                        sector_dict[sector]["외국인"] += merged.loc[ticker, "외국인"]
-                        sector_dict[sector]["기관"]   += merged.loc[ticker, "기관"]
-                        sector_dict[sector]["합계"]   += merged.loc[ticker, "합계"]
-                        sector_dict[sector]["종목"].append(ticker)
-                    except Exception:
-                        continue
-
-                if not sector_dict:
-                    st.warning("섹터 데이터를 불러올 수 없습니다.")
+                top_f = df[df["외국인순매수"] > 0].sort_values("외국인순매수", ascending=False).head(15)
+                if top_f.empty:
+                    st.warning("외국인 순매수 데이터가 없습니다.")
                 else:
-                    sector_sorted = sorted(sector_dict.items(), key=lambda x: x[1]["합계"], reverse=True)[:8]
-                    names  = [s[0] for s in sector_sorted]
-                    totals = [s[1]["합계"] / 1e8 for s in sector_sorted]
-                    colors = ["#E24B4A" if v >= 0 else "#378ADD" for v in totals]
-
-                    fig = go.Figure(go.Bar(
-                        x=names, y=totals,
-                        marker_color=colors,
-                        text=[f"{v:.0f}억" for v in totals],
-                        textposition="outside",
-                    ))
-                    fig.update_layout(
-                        height=280,
-                        margin=dict(l=0, r=0, t=10, b=60),
-                        yaxis_title="순매수 (억원)",
-                        plot_bgcolor="white",
-                        paper_bgcolor="white",
-                        font=dict(size=11),
-                        xaxis=dict(tickangle=-30),
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-
-                    top_name, top_data = sector_sorted[0]
-                    st.markdown(f"#### 🏆 오늘 1위: **{top_name}**")
-                    st.markdown(
-                        f"<span class='tag-buy'>외국인 {top_data['외국인']/1e8:+.0f}억</span> "
-                        f"<span class='tag-inst'>기관 {top_data['기관']/1e8:+.0f}억</span>",
-                        unsafe_allow_html=True
-                    )
-                    st.markdown("---")
-                    st.markdown("##### 주요 종목")
-                    for ticker in top_data["종목"][:10]:
-                        try:
-                            name = stock.get_market_ticker_name(ticker)
-                            if ticker not in ohlcv_df.index:
-                                continue
-                            row   = ohlcv_df.loc[ticker]
-                            price = get_price(row)
-                            chg   = get_chg(row)
-                            f_val = merged.loc[ticker, "외국인"] / 1e8 if ticker in merged.index else 0
-                            i_val = merged.loc[ticker, "기관"] / 1e8 if ticker in merged.index else 0
-                            c1, c2 = st.columns([2, 1])
-                            with c1:
-                                st.markdown(f"**{name}**")
-                                st.markdown(
-                                    f"<span class='tag-buy'>외인 {f_val:+.0f}억</span> "
-                                    f"<span class='tag-inst'>기관 {i_val:+.0f}억</span>",
-                                    unsafe_allow_html=True
-                                )
-                            with c2:
-                                st.metric("", f"{int(price):,}원", f"{chg:+.1f}%",
-                                          delta_color="normal" if chg >= 0 else "inverse")
-                            st.divider()
-                        except Exception:
-                            continue
+                    for _, row in top_f.iterrows():
+                        chg = row["등락률"]
+                        c1, c2 = st.columns([2, 1])
+                        with c1:
+                            st.markdown(f"**{row['종목명']}**")
+                            st.markdown(
+                                f"<span class='tag-buy'>외인 +{row['외국인순매수']:,}주</span> "
+                                f"<span class='tag-vol'>거래량 {row['거래량']:,}</span>",
+                                unsafe_allow_html=True
+                            )
+                        with c2:
+                            st.metric("", f"{row['현재가']:,}원", f"{chg:+.1f}%",
+                                      delta_color="normal" if chg >= 0 else "inverse")
+                        st.divider()
         except Exception as e:
-            st.error(f"데이터 오류: {e}")
+            st.error(f"오류: {e}")
 
 with tab2:
-    st.markdown("#### 낙폭과대 + 외국인/기관 동시 매수")
+    st.markdown("#### 낙폭과대 + 외국인 순매수")
     min_drop = st.session_state.get("min_drop", 30)
     min_vol  = st.session_state.get("min_vol", 1.5)
-    st.caption(f"조건: 고점대비 -{min_drop}% 이상 · 거래량 {min_vol}배↑ · 외인+기관 동시 순매수")
+    st.caption(f"조건: 고점대비 -{min_drop}% 이상 · 거래량 {min_vol}배↑ · 외국인 순매수")
 
-    if st.button("🔍 전체 시장 스크리닝", use_container_width=True):
-        with st.spinner("전체 종목 분석 중... (1~2분 소요)"):
-            results = []
+    if st.button("🔍 스크리닝 실행", use_container_width=True):
+        with st.spinner("분석 중... (1~2분 소요)"):
             try:
-                foreign_df = load_foreign(bizday)
-                inst_df    = load_institution(bizday)
-                ohlcv_df   = load_ohlcv(bizday)
-
-                if foreign_df.empty:
-                    st.warning("수급 데이터 없음. 잠시 후 다시 시도해 주세요.")
+                df = load_investor_by_stock(bizday)
+                if df.empty:
+                    st.warning("데이터 없음. 잠시 후 다시 시도해 주세요.")
                 else:
-                    f_col = foreign_df.columns[0]
-                    i_col = inst_df.columns[0] if not inst_df.empty else None
+                    results = []
+                    cands = df[df["외국인순매수"] > 0]
                     progress = st.progress(0)
-                    all_tickers = list(ohlcv_df.index)
+                    total = len(cands)
 
-                    for i, ticker in enumerate(all_tickers):
-                        progress.progress(min(int((i+1)/len(all_tickers)*100), 100))
+                    market_df = load_market_data(bizday)
+                    ticker_map = {}
+                    if not market_df.empty:
+                        for col in ["Symbol", "Code", "ticker"]:
+                            if col in market_df.columns:
+                                name_col = [c for c in market_df.columns if "Name" in c or "종목명" in c]
+                                if name_col:
+                                    ticker_map = dict(zip(market_df[name_col[0]], market_df[col]))
+                                break
+
+                    for i, (_, row) in enumerate(cands.iterrows()):
+                        progress.progress(min(int((i+1)/max(total,1)*100), 100))
                         try:
-                            row      = ohlcv_df.loc[ticker]
-                            price    = get_price(row)
-                            volume   = get_volume(row)
-                            chg      = get_chg(row)
+                            name   = row["종목명"]
+                            price  = row["현재가"]
+                            chg    = row["등락률"]
+                            volume = row["거래량"]
+                            f_net  = row["외국인순매수"]
                             if price == 0:
                                 continue
-                            f_val = foreign_df.loc[ticker, f_col] if ticker in foreign_df.index else 0
-                            i_val = inst_df.loc[ticker, i_col] if (i_col and ticker in inst_df.index) else 0
-                            if f_val <= 0 or i_val <= 0:
+                            ticker = ticker_map.get(name)
+                            if not ticker:
                                 continue
                             high52 = load_52w_high(ticker)
                             if not high52 or high52 == 0:
@@ -301,19 +231,13 @@ with tab2:
                             drop_pct = (price - high52) / high52 * 100
                             if drop_pct > -min_drop:
                                 continue
-                            avg_vol   = load_volume_avg(ticker)
-                            vol_ratio = volume / avg_vol if avg_vol and avg_vol > 0 else 0
-                            if vol_ratio < min_vol:
-                                continue
                             results.append({
+                                "name":   name,
                                 "ticker": ticker,
-                                "name":   stock.get_market_ticker_name(ticker),
                                 "price":  price,
                                 "chg":    chg,
                                 "drop":   drop_pct,
-                                "vol":    vol_ratio,
-                                "f_val":  f_val / 1e8,
-                                "i_val":  i_val / 1e8,
+                                "f_net":  f_net,
                             })
                         except Exception:
                             continue
@@ -322,24 +246,23 @@ with tab2:
 
                     if results:
                         st.success(f"✅ {len(results)}개 종목 발견")
-                        for r in sorted(results, key=lambda x: -(x["f_val"]+x["i_val"]))[:20]:
+                        for r in sorted(results, key=lambda x: x["drop"])[:20]:
                             c1, c2 = st.columns([2, 1])
                             with c1:
                                 st.markdown(f"**{r['name']}** `{r['ticker']}`")
                                 st.markdown(
                                     f"<span class='tag-drop'>고점대비 {r['drop']:.1f}%</span> "
-                                    f"<span class='tag-buy'>외인 +{r['f_val']:.0f}억</span> "
-                                    f"<span class='tag-inst'>기관 +{r['i_val']:.0f}억</span> "
-                                    f"<span class='tag-vol'>거래량 {r['vol']:.1f}배</span>",
+                                    f"<span class='tag-buy'>외인 +{r['f_net']:,}주</span>",
                                     unsafe_allow_html=True
                                 )
                             with c2:
-                                st.metric("", f"{int(r['price']):,}원", f"{r['chg']:+.1f}%",
+                                st.metric("", f"{r['price']:,}원", f"{r['chg']:+.1f}%",
                                           delta_color="normal" if r["chg"] >= 0 else "inverse")
                             chart = load_chart(r["ticker"])
                             if not chart.empty:
                                 fig = go.Figure(go.Scatter(
-                                    x=chart.index, y=chart.values,
+                                    x=list(range(len(chart))),
+                                    y=chart.values,
                                     mode="lines",
                                     line=dict(color="#378ADD", width=1.5),
                                     fill="tozeroy",
