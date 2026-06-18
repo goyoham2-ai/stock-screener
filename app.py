@@ -125,7 +125,10 @@ def load_investor_by_stock(date_str):
                             })
                     except Exception:
                         continue
-        return pd.DataFrame(result) if result else pd.DataFrame()
+       df = pd.DataFrame(result) if result else pd.DataFrame()
+        if not df.empty:
+            df = df.drop_duplicates(subset=["종목명"]).reset_index(drop=True)
+        return df
     except Exception as e:
         return pd.DataFrame()
 
@@ -258,7 +261,7 @@ with tab2:
                             with c2:
                                 st.metric("", f"{r['price']:,}원", f"{r['chg']:+.1f}%",
                                           delta_color="normal" if r["chg"] >= 0 else "inverse")
-                            chart = load_chart(r["ticker"])
+                           chart = load_chart(r["ticker"])
                             if not chart.empty:
                                 fig = go.Figure(go.Scatter(
                                     x=list(range(len(chart))),
@@ -276,7 +279,7 @@ with tab2:
                                     plot_bgcolor="white",
                                     paper_bgcolor="white",
                                 )
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig, use_container_width=True, key=f"chart_{r['ticker']}")
                             st.divider()
                     else:
                         st.warning("조건에 맞는 종목 없음. 설정에서 조건을 완화해 보세요.")
