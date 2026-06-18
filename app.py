@@ -39,14 +39,18 @@ def get_prev_bizday(date_str, n=1):
             count += 1
     return d.strftime("%Y%m%d")
 
+def find_col(df, candidates):
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return df.columns[0]
+
 @st.cache_data(ttl=1800)
 def load_ohlcv(date_str):
     try:
         df1 = stock.get_market_ohlcv_by_ticker(date_str, market="KOSPI")
         df2 = stock.get_market_ohlcv_by_ticker(date_str, market="KOSDAQ")
-        df = pd.concat([df1, df2])
-        # 컬럼명 디버깅용
-        return df
+        return pd.concat([df1, df2])
     except Exception as e:
         st.error(f"OHLCV 로드 오류: {e}")
         return pd.DataFrame()
@@ -57,7 +61,7 @@ def load_foreign(date_str):
         k1 = stock.get_market_net_purchases_of_equities_by_ticker(date_str, date_str, "KOSPI", "외국인")
         k2 = stock.get_market_net_purchases_of_equities_by_ticker(date_str, date_str, "KOSDAQ", "외국인")
         return pd.concat([k1, k2])
-    except Exception as e:
+    except Exception:
         return pd.DataFrame()
 
 @st.cache_data(ttl=1800)
@@ -66,7 +70,7 @@ def load_institution(date_str):
         k1 = stock.get_market_net_purchases_of_equities_by_ticker(date_str, date_str, "KOSPI", "기관합계")
         k2 = stock.get_market_net_purchases_of_equities_by_ticker(date_str, date_str, "KOSDAQ", "기관합계")
         return pd.concat([k1, k2])
-    except Exception as e:
+    except Exception:
         return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
@@ -77,8 +81,8 @@ def load_52w_high(ticker):
         df = stock.get_market_ohlcv_by_date(d_start, d_end, ticker)
         if df.empty:
             return None
-        col = [c for c in df.columns if "고가" in c or "High" in c.lower()]
-        return df[col[0]].max() if col else df.iloc[:, 1].max()
+        col = find_col(df, ["고가", "High", "high"])
+        return df[col].max()
     except Exception:
         return None
 
@@ -90,8 +94,8 @@ def load_volume_avg(ticker, days=20):
         df = stock.get_market_ohlcv_by_date(d_start, d_end, ticker)
         if df.empty or len(df) < 5:
             return None
-        col = [c for c in df.columns if "거래량" in c or "Volume" in c.lower()]
-        return df[col[0]].mean() if col else df.iloc[:, 4].mean()
+        col = find_col(df, ["거래량", "Volume", "volume"])
+        return df[col].mean()
     except Exception:
         return None
 
@@ -103,22 +107,30 @@ def load_chart(ticker, days=30):
         df = stock.get_market_ohlcv_by_date(d_start, d_end, ticker)
         if df.empty:
             return pd.Series()
-        col = [c for c in df.columns if "종가" in c or "Close" in c.lower()]
-        return df[col[0]] if col else df.iloc[:, 3]
+        col = find_col(df, ["종가", "Close", "close"])
+        return df[col]
     except Exception:
         return pd.Series()
+
+@st.cache_data(ttl=1800)
+def debug_ohlcv_columns(date_str):
+    try:
+        df = stock.get_market_ohlcv_by_ticker(date_str, market="KOSPI")
+        return list(df.columns)
+    except Exception as e:
+        return [str(e)]
 
 def get_price(row):
     for c in ["종가", "Close", "close"]:
         if c in row.index:
             return row[c]
-    return row.iloc[3]
+    return row.iloc[3] if len(row) > 3 else 0
 
 def get_volume(row):
     for c in ["거래량", "Volume", "volume"]:
         if c in row.index:
             return row[c]
-    return row.iloc[4]
+    return row.iloc[4] if len(row) > 4 else 0
 
 def get_chg(row):
     for c in ["등락률", "Change", "change", "등락"]:
@@ -129,6 +141,16 @@ def get_chg(row):
 st.title("📈 수급 스크리너")
 bizday = get_last_bizday(1)
 st.caption(f"기준일: {bizday[:4]}.{bizday[4:6]}.{bizday[6:]} · 장 마감 후 업데이트")
+
+# 디버깅: 실제 컬럼명 확인
+with st.expander("🔧 데이터 컬럼 확인 (문제해결용)"):
+    cols = debug_ohlcv_columns(bizday)
+    st.write("OHLCV 컬럼명:", cols)
+    f_df = load_foreign(bizday)
+    if not f_df.empty:
+        st.write("외국인 수급 컬럼명:", list(f_df.columns))
+    else:
+        st.write("외국인 수급 데이터 없음")
 
 tab1, tab2, tab3 = st.tabs(["📊 주도섹터", "🔍 낙폭과대주", "⚙️ 설정"])
 
@@ -141,20 +163,18 @@ with tab1:
             ohlcv_df   = load_ohlcv(bizday)
 
             if foreign_df.empty:
-                st.warning("외국인 수급 데이터를 불러올 수 없습니다. 장 마감 후(오후 4시 이후) 다시 시도해 주세요.")
+                st.warning("외국인 수급 데이터를 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.")
+            elif ohlcv_df.empty:
+                st.warning("주가 데이터를 불러올 수 없습니다.")
             else:
                 f_col = foreign_df.columns[0]
                 i_col = inst_df.columns[0] if not inst_df.empty else None
 
                 merged = pd.DataFrame({"외국인": foreign_df[f_col]})
-                if i_col:
-                    merged["기관"] = inst_df[i_col]
-                else:
-                    merged["기관"] = 0
+                merged["기관"] = inst_df[i_col] if i_col else 0
                 merged = merged.fillna(0)
                 merged["합계"] = merged["외국인"] + merged["기관"]
 
-                # 섹터별 집계
                 sector_dict = {}
                 for ticker in merged.index:
                     try:
@@ -246,7 +266,7 @@ with tab2:
                 ohlcv_df   = load_ohlcv(bizday)
 
                 if foreign_df.empty:
-                    st.warning("수급 데이터 없음. 장 마감 후 다시 시도해 주세요.")
+                    st.warning("수급 데이터 없음. 잠시 후 다시 시도해 주세요.")
                 else:
                     f_col = foreign_df.columns[0]
                     i_col = inst_df.columns[0] if not inst_df.empty else None
