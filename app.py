@@ -25,7 +25,8 @@ div[data-testid="metric-container"]{background:#f0f4ff;border-radius:10px;paddin
 """, unsafe_allow_html=True)
 
 def get_last_bizday(offset=1):
-    d = datetime.datetime.now() - datetime.timedelta(days=offset)
+    KST = datetime.timezone(datetime.timedelta(hours=9))
+    d = datetime.datetime.now(KST) - datetime.timedelta(days=offset)
     while d.weekday() >= 5:
         d -= datetime.timedelta(days=1)
     return d.strftime("%Y%m%d")
