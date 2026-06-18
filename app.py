@@ -51,7 +51,15 @@ def load_ohlcv(date_str):
     try:
         df1 = stock.get_market_ohlcv_by_ticker(date_str, market="KOSPI")
         df2 = stock.get_market_ohlcv_by_ticker(date_str, market="KOSDAQ")
-        return pd.concat([df1, df2])
+        df = pd.concat([df1, df2])
+        # 컬럼명 영문 변환
+        rename_map = {
+            "시가": "Open", "고가": "High", "저가": "Low",
+            "종가": "Close", "거래량": "Volume", "거래대금": "Amount",
+            "등락률": "Change"
+        }
+        df = df.rename(columns=rename_map)
+        return df
     except Exception as e:
         st.error(f"OHLCV 로드 오류: {e}")
         return pd.DataFrame()
